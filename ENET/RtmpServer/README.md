@@ -187,3 +187,45 @@ AMF（Action Message Format）是在 RTMP 协议里对 Flash/JS 对象和基本�
 - “编码端随时检查并扩容；解码端按需提前检测数据是否足够”
 
 这种设计既保证了对 RTMP 消息中命令和元数据的灵活处理，也能较高效地在内存和网络字节流之间互转。
+
+
+
+RtmpSession 主负责管理一个直播会话（Session）中的发布者（Publisher）和观看者（Player），并在合适的时机将元数据和音视频流分发给各客户端。其核心流程可以分为以下几步：
+
+1. 会话初始化  
+   - 构造时只初始化内部状态（无发布者、无缓存），所有操作都由后续接口驱动。  
+
+2. 添加连接（AddSink）  
+   - 加锁保护并发访问。  
+   - 将任意 RtmpSink（Publisher 或 Player）存入 `rtmp_sinks_` 映射，key 为唯一 ID。  
+   - 如果该 Sink 是 Publisher：  
+     1. 重置之前缓存的 AVC/AAC Sequence Header（因为新发布者要重新推流）。  
+     2. 标记 `has_publisher_ = true`，并通过弱引用 `publisher_` 保存此发布者。  
+
+3. 移除连接（RemoveSink）  
+   - 加锁保护并发访问。  
+   - 如果移除的是 Publisher，则同样清空 Sequence Header 缓存并重置 `has_publisher_`。  
+   - 从 `rtmp_sinks_` 中删除对应 ID 条目。  
+
+4. 查询在线客户端数量（GetClients）  
+   - 遍历 `rtmp_sinks_`，对每个弱引用尝试 lock()。  
+   - 只有 lock() 成功（表示连接还在）才计数。  
+
+5. 分发元数据（SendMetaData）  
+   - 加锁后遍历所有 Sink：  
+     • 仅对 `IsPlayer()==true` 的观看者调用 `SendMetaData(AmfObjects&)`。  
+     • 自动清理那 些 lock() 失败（已断开）的弱引用。  
+
+6. 分发流数据（SendMediaData）  
+   - 加锁后遍历所有 Sink：  
+     1. 仅对观看者（`IsPlayer()`）发送  
+     2. 对于尚未调用过任何流数据的“新观众”（`!IsPlaying()`）：  
+        a. 先发送缓存的 AAC Sequence Header（`RTMP_AAC_SEQUENCE_HEADER`）  
+        b. 再发送缓存的 AVC Sequence Header（`RTMP_AVC_SEQUENCE_HEADER`）  
+     3. 最后发送当前帧（type、timestamp、data、size）  
+   - 同样自动剔除已断开的客户端。  
+
+7. 获取发布者（GetPublisher）  
+   - 加锁后对 `publisher_` 进行弱引用提升（`lock()`），成功则 `dynamic_pointer_cast` 为 RtmpConnection 并返回，否则返回 nullptr。  
+
+整个过程中，`std::mutex mutex_` 保证了多线程环境下对 `rtmp_sinks_`、发布者状态和 Sequence Header 缓存的安全访问。
