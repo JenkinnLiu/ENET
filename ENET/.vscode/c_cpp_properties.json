@@ -1,0 +1,23 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${env:INCLUDE}" // 添加：使用环境变量 INCLUDE 引入系统头目录
+            ],
+            "defines": [],
+            "compilerPath": "cl.exe",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "msvc-x64",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/**",
+                    "${env:INCLUDE}" // 浏览路径也包含系统头
+                ]
+            }
+        }
+    ],
+    "version": 4
+}
