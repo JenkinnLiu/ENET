@@ -98,10 +98,10 @@ AMF（Action Message Format）是 Flash/RTMP 生态里用于在二进制流中�
 
 简而言之，AMF 编解码是 RTMP 在应用层“命令+元数据”与底层网络字节流之间的桥梁，专门用来序列化／反序列化脚本级的数据结构。
 
-![alt text](image.png)
-![alt text](image-1.png)
-![alt text](image-2.png)
-![alt text](image-3.png)
+![alt text](./image/image.png)
+![alt text](./image/image-1.png)
+![alt text](./image/image-2.png)
+![alt text](./image/image-3.png)
 
 AMF（Action Message Format）是在 RTMP 协议里对 Flash/JS 对象和基本类型（Number、Boolean、String、Object、ECMA Array 等）做二进制序列化的标准格式。引入 AMF 编解码的意义主要包括：
 
@@ -229,3 +229,73 @@ RtmpSession 主负责管理一个直播会话（Session）中的发布者（Publ
    - 加锁后对 `publisher_` 进行弱引用提升（`lock()`），成功则 `dynamic_pointer_cast` 为 RtmpConnection 并返回，否则返回 nullptr。  
 
 整个过程中，`std::mutex mutex_` 保证了多线程环境下对 `rtmp_sinks_`、发布者状态和 Sequence Header 缓存的安全访问。
+
+
+## 完成握手后 RTMP 会话典型流程
+
+以下以 `createStream` + `play` 为例，说明客户端（Client）与服务端（Server）在握手完成后的完整交互流程。
+
+1. **Connect 阶段**  
+   - Client → Server: 发送 AMF0 invoke 消息（`Command “connect”`），包含  
+     - app 名称、flashVer、tcUrl、objectEncoding 等参数  
+   - Server:  
+     1. 发送 应答Acknowledgement、带宽限制Peer Bandwidth、分块大小Set Chunk Size 等控制消息  
+     2. 回复 AMF0 invoke（`_result`），表示 `NetConnection.Connect.Success`  
+
+2. **创建流（createStream）**  
+   - Client → Server: 发送 AMF0 invoke 消息（`Command “createStream”`）  
+   - Server → Client: 回复 AMF0 invoke（`_result`），返回新分配的 `stream_id`  
+
+3. **开始播放（play）**  
+   - Client → Server: 发送 AMF0 invoke 消息（`Command “play”`），带上刚才得到的 `stream_id` 和 `stream name`  
+   - Server 按顺序发送：  
+     1. AMF0 invoke（`onStatus NetStream.Play.Reset`）  
+     2. AMF0 invoke（`onStatus NetStream.Play.Start`）  
+     3. AMF0 notify（`|RtmpSampleAccess`，告知读写权限）  
+   - Server 建立内部 `RtmpSession`，将当前连接注册为“观看者”（AddSink）。
+
+4. **元数据和序列头**  
+   - Server → Client: RTMP notify（`onMetaData`），携带视频宽高、码率、帧率等元信息  
+   - Server → Client: 视频 AAC/AVC 序列头（`RTMP_VIDEO` 和 `RTMP_AUDIO` 中的 sequence header 包），确保播放器解码器初始化  
+
+5. **推送媒体数据**  
+   - Server 定期将已经缓存或正在接收的音视频包分片（Chunk）后，按时间戳  
+     - 关键帧优先推送，确保播放器能快速寻址  
+     - 然后连续推送后续帧（视频/音频）  
+   - Client 解析 Chunk → 组装 RTMPMessage → 解码并交给底层播放器渲染  
+
+6. **停止播放 / 删除流**  
+   - Client → Server: AMF0 invoke（`Command “deleteStream”`）  
+   - Server 清理对应 `RtmpSession` 中的 Sink（延迟一帧或立即移除），并发送 onStatus “NetStream.Play.Stop”  
+
+---
+
+整个流程中，Server 会通过 `RtmpSession` 对流做统一管理（缓存序列头、分发给多个观看者、接收多路推流者等），确保音视频同步、有序到达。
+
+
+RtmpServer 是整个 RTMP 服务端的核心入口和会话管理器，其主要作用包括：
+
+1. TCP 监听与连接分发  
+   • 继承自 TcpServer，负责监听客户端的 TCP 连接请求。  
+   • 在 OnConnect 回调中，为每个新连接创建一个 RtmpConnection 实例，将底层 socket 交给它进行握手、Chunk 解析和命令处理。
+
+2. 流（Stream）会话管理  
+   • 使用一个线程安全的 map（rtmp_sessions_）将流路径（“/app/streamName”）映射到 RtmpSession 对象。  
+   • AddSession、RemoveSession、GetSession：分别用于在 publish 时新建会话、deleteStream 时删除会话，以及按需获取或创建会话。  
+   • 定期（每 3 秒）扫描所有会话，清理无观众（GetClients() == 0）且无发布者的空闲会话，避免内存泄漏。
+
+3. 发布者 & 订阅者协调  
+   • HasPublisher：检查某一路流是否已有发布者在推流，防止同一路流被多次推送。  
+   • RtmpSession 内部维护发布者（Publisher）和多个订阅者（Sink），RtmpServer 负责为它们分配、通知和清理。
+
+4. 事件回调机制  
+   • 支持外部注册事件回调（SetEventCallback），上层可监听“publish.start”、“publish.stop”、“play.start”、“play.stop”等事件。  
+   • NotifyEvent：在流开始推送、停止推送或开始/停止播放时，统一触发所有已注册的回调。
+
+5. 协议参数提供  
+   • 继承自 Rtmp，提供握手时所需的带宽、chunk 大小、ack 窗口等默认配置，RtmpConnection 在构造时会读取这些参数初始化自身的握手和分片逻辑。
+
+总结：  
+RtmpServer 将低层的网络 I/O、定时清理、会话生命周期和上层事件通知串联起来，为每条流提供了从连接接入、握手、命令交互到音视频分发的完整管理能力。
+
+![alt text](./image/image-4.png)
