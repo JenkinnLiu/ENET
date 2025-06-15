@@ -1,6 +1,7 @@
 ![alt text](./image/image.png)
 ![alt text](./image/image-1.png)
 
+
 define.h 定义信令服务器使用的命令、结果码、客户端状态及通信数据包结构。
 本文件用于客户端与服务器之间的信令交互，支持房间创建、获取流、播放/停止流
 以及键鼠控制等功能。
@@ -87,3 +88,5 @@ SigConnection 是信令服务器中负责单个客户端会话管理与消息转
    - DisConnected/​Clear：移除自身在 ConnectionManager 的注册，遍历 objectes_ 通知所有对端更新流数量或停止播放，重置状态  
 
 通过上述机制，SigConnection 在信令层实现了房间管理、推／拉流协商、流控制和键鼠事件转发，确保多客户端间的协同控制与流媒体会话建立。
+
+
