@@ -1,7 +1,17 @@
-﻿#include "TitleWgt.h"
+﻿/**
+ * @file TitleWgt.cpp
+ * @brief 自定义窗口标题栏实现，包含最小化和关闭按钮的布局和行为
+ * @date 2025-06-16
+ */
+
+#include "TitleWgt.h"
 #include <QHBoxLayout>
 #include "StyleLoader.h"
 
+/**
+ * @brief 构造函数，初始化无边框标题栏并创建按钮，设置布局和样式
+ * @param parent 父窗口指针
+ */
 TitleWgt::TitleWgt(QWidget *parent)
     : QWidget{parent}
 {
@@ -27,10 +37,11 @@ TitleWgt::TitleWgt(QWidget *parent)
 
     QHBoxLayout* layout = new QHBoxLayout(this);
     layout->addStretch(1);
-    layout->addWidget(minBtn_);
-    layout->addWidget(closeBtn_);
+    layout->addWidget(minBtn_);// 添加最小化按钮
+    layout->addWidget(closeBtn_); // 添加关闭按钮
     layout->setContentsMargins(0,0,0,0);
     setLayout(layout);
 
-    StyleLoader::getInstance()->loadStyle(":/UI/brown/main.css",this);
+    // 设置样式表
+    StyleLoader::getInstance()->loadStyle(":/UI/brown/main.css", this);
 }

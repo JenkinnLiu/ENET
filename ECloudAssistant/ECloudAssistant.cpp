@@ -1,4 +1,11 @@
-﻿#include "ECloudAssistant.h"
+﻿/**
+ * @file ECloudAssistant.cpp
+ * @brief 实现主窗口 ECloudAssistant 的功能，包含标题栏、信息列表和主工作区的布局，并支持窗口拖拽
+ * @author 
+ * @date 2025-06-16
+ */
+
+#include "ECloudAssistant.h"
 #include "TitleWgt.h"
 #include "ListInfoWgt.h"
 #include "MainWgt.h"
@@ -33,6 +40,10 @@ ECloudAssistant::~ECloudAssistant()
 {
 }
 
+/**
+ * @brief 鼠标移动事件处理函数，实现拖拽移动窗口
+ * @param event 包含鼠标位置和按键信息的事件对象
+ */
 void ECloudAssistant::mouseMoveEvent(QMouseEvent *event)
 {
     if(event->buttons() & Qt::LeftButton && is_press_)
@@ -45,6 +56,10 @@ void ECloudAssistant::mouseMoveEvent(QMouseEvent *event)
     QWidget::mouseMoveEvent(event);
 }
 
+/**
+ * @brief 鼠标按下事件处理函数，记录拖拽起点
+ * @param event 包含鼠标按键信息的事件对象
+ */
 void ECloudAssistant::mousePressEvent(QMouseEvent *event)
 {
     if(!qobject_cast<QPushButton*>(childAt(event->pos())))
@@ -55,6 +70,10 @@ void ECloudAssistant::mousePressEvent(QMouseEvent *event)
     QWidget::mousePressEvent(event);
 }
 
+/**
+ * @brief 鼠标释放事件处理函数，结束拖拽状态
+ * @param event 包含鼠标释放动作信息的事件对象
+ */
 void ECloudAssistant::mouseReleaseEvent(QMouseEvent *event)
 {
     if(event->button() == Qt::LeftButton)

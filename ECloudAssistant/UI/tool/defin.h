@@ -1,45 +1,64 @@
-﻿#ifndef DEFIN_H
+﻿/**
+ * @file defin.h
+ * @brief 定义客户端与服务器交互使用的命令、返回码及网络包结构体
+ * @date 2025-06-16
+ */
+#ifndef DEFIN_H
 #define DEFIN_H
+
 #include <cstdint>
 #include <string>
 #include <array>
 
 #pragma pack(push,1)
+
+/**
+ * @enum Cmd
+ * @brief 客户端与服务器交互命令枚举
+ */
 enum Cmd : uint16_t
 {
-    Minotor,
-    ERROR_,
-    Login,
-    Register,
-    Destory,
-    JOIN,
-    OBTAINSTREAM,
-    CREATESTREAM,
-    PLAYSTREAM,
-    DELETESTREAM,
-    MOUSE,
-    MOUSEMOVE,
-    KEY,
-    WHEEL,
+    Minotor,       ///< 监听命令
+    ERROR_,        ///< 错误命令
+    Login,         ///< 登录命令
+    Register,      ///< 注册命令
+    Destory,       ///< 注销命令
+    JOIN,          ///< 加入会话
+    OBTAINSTREAM,  ///< 请求流
+    CREATESTREAM,  ///< 创建流
+    PLAYSTREAM,    ///< 播放流
+    DELETESTREAM,  ///< 删除流
+    MOUSE,         ///< 鼠标事件
+    MOUSEMOVE,     ///< 鼠标移动事件
+    KEY,           ///< 键盘事件
+    WHEEL,         ///< 滚轮事件
 };
 
+/**
+ * @enum ResultCode
+ * @brief 服务器返回结果码
+ */
 enum ResultCode
 {
-    S_OK_ = 0,
-    SERVER_ERROR ,
-    REQUEST_TIMEOUT ,
-    ALREADY_REDISTERED ,
-    USER_DISAPPEAR,
-    ALREADY_LOGIN,
-    VERFICATE_FAILED,
+    S_OK_ = 0,          ///< 成功
+    SERVER_ERROR,       ///< 服务器错误
+    REQUEST_TIMEOUT,    ///< 请求超时
+    ALREADY_REDISTERED, ///< 用户已注册
+    USER_DISAPPEAR,     ///< 用户不存在
+    ALREADY_LOGIN,      ///< 已登录
+    VERFICATE_FAILED,   ///< 验证失败
 };
 
+/**
+ * @struct packet_head
+ * @brief 所有网络包的统一头部
+ */
 struct packet_head {
     packet_head()
-        :len(-1)
+        : len(-1)
         , cmd(-1) {}
-    uint16_t len;
-    uint16_t cmd;
+    uint16_t len; ///< 包总长度
+    uint16_t cmd; ///< 命令类型
 };
 
 struct Login_Info : public packet_head

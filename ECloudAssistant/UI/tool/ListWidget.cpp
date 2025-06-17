@@ -15,6 +15,7 @@ ListWidget::~ListWidget()
 
 }
 
+// 添加自定义控件到列表中
 void ListWidget::AddWidget(CustomWgt *widget)
 {
     QListWidgetItem* listWidgetItem = new QListWidgetItem(this);
@@ -22,6 +23,7 @@ void ListWidget::AddWidget(CustomWgt *widget)
     this->setItemWidget(listWidgetItem, widget);
 }
 
+// 鼠标按下事件处理函数，发送 itemCliked 信号
 void ListWidget::mousePressEvent(QMouseEvent *event)
 {
     if(event->buttons() & Qt::LeftButton)
