@@ -1,4 +1,12 @@
-﻿#include "VideoEncoder.h"
+﻿/**
+ * @file VideoEncoder.cpp
+ * @brief H.264 视频编码器实现
+ *
+ * 实现了 VideoEncoder 类的方法，包括编码器初始化、像素转换
+ * 以及帧数据发送与接收流程，输出 H.264 码流包。
+ */
+
+#include "VideoEncoder.h"
 #include "VideoConvert.h"
 
 extern "C"
@@ -8,6 +16,11 @@ extern "C"
     #include<libavutil/opt.h>
 }
 
+/**
+ * @brief 构造函数
+ *
+ * 分配用于转换前的 RGBA AVFrame 和输出 H.264 AVPacket。
+ */
 VideoEncoder::VideoEncoder()
     :pts_(0)
     ,width_(0)
@@ -17,16 +30,33 @@ VideoEncoder::VideoEncoder()
     ,h264_packet_(nullptr)
     ,converter_(nullptr)
 {
-    //创建AVframe avpacket
+    // 创建并管理原始像素帧
     rgba_frame_.reset(av_frame_alloc(),[](AVFrame* ptr){av_frame_free(&ptr);});
+    // 创建并管理编码输出包
     h264_packet_.reset(av_packet_alloc(),[](AVPacket* ptr){av_packet_free(&ptr);});
 }
 
+/**
+ * @brief 析构函数
+ *
+ * 调用 Close 释放编码器及转换器资源。
+ */
 VideoEncoder::~VideoEncoder()
 {
     Close();
 }
 
+/**
+ * @brief 初始化 H.264 编码器
+ * @param video_config 编码参数（宽度、高度、帧率、码率等）
+ * @return 成功返回 true，失败返回 false
+ *
+ * 步骤：
+ *  1. 查找并创建 libavcodec 的 H.264 编码器上下文
+ *  2. 设置宽高、像素格式(YUV420P)、帧率、GOP 大小等
+ *  3. 配置低延迟选项（zerolatency、ultrafast）
+ *  4. 调用 avcodec_open2 打开编码器
+ */
 bool VideoEncoder::Open(AVConfig &video_config)
 {
     //初始化
@@ -86,8 +116,12 @@ bool VideoEncoder::Open(AVConfig &video_config)
     return true;
 }
 
+/**
+ * @brief 关闭编码器并清理资源
+ */
 void VideoEncoder::Close()
 {
+    // 重置宽高和PTS状态
     width_ = 0;
     height_ = 0;
     pts_ = 0;
@@ -100,6 +134,21 @@ void VideoEncoder::Close()
     }
 }
 
+/**
+ * @brief 对一帧像素数据进行编码
+ * @param data 原始像素缓冲（如 RGBA）
+ * @param width 缓冲宽度
+ * @param height 缓冲高度
+ * @param data_size 数据大小（字节）
+ * @param pts 帧时间戳，可选，默认为自动递增
+ * @return 成功返回 AVPacketPtr，内含 H.264 码流；失败返回 nullptr
+ *
+ * 流程：
+ *  1. 若分辨率或格式与目标不符，创建并初始化 VideoConverter
+ *  2. 将原始 data 数据拷贝到 rgba_frame_
+ *  3. 调用 converter_->Convert 得到 YUV420P AVFrame
+ *  4. 使用 avcodec_send_frame / avcodec_receive_packet 进行编码
+ */
 AVPacketPtr VideoEncoder::Encode(const quint8 *data, quint32 width, quint32 height, quint32 data_size, quint64 pts)
 {
     //开始编码

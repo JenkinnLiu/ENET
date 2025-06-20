@@ -1,68 +1,70 @@
-﻿#include "AudioEncoder.h"
+﻿/**
+ * @file AudioEncoder.cpp
+ * @brief 实现 AudioEncoder 类，包括初始化编码器、重采样、PCM 到 AAC 编码及释放资源等功能
+ * @date 2025-06-19
+ */
+
+#include "AudioEncoder.h"
 #include "Audio_Resampler.h"
 
+/**
+ * @brief 构造函数，初始化重采样器指针为空
+ */
 AudioEncoder::AudioEncoder()
-    :audio_resampler_(nullptr)
+    : audio_resampler_(nullptr)
 {
-
 }
 
+/**
+ * @brief 析构函数，确保所有资源关闭并释放
+ */
 AudioEncoder::~AudioEncoder()
 {
     Close();
 }
 
+/**
+ * @brief 打开 AAC 编码器并初始化重采样器
+ * @param config 音频配置参数，包含采样率、通道等
+ * @return true 打开并初始化成功，false 失败
+ */
 bool AudioEncoder::Open(AVConfig &config)
 {
-    //初始化编码器
     if(is_initialzed_)
-    {
         return false;
-    }
 
     config_ = config;
-    //创建编码器
+    // 查找 AAC 编码器
     codec_ = const_cast<AVCodec*>(avcodec_find_encoder(AV_CODEC_ID_AAC));
     if(!codec_)
-    {
-        Close();
         return false;
-    }
 
-    //创建编码器上下文
+    // 分配编码上下文
     codecContext_ = avcodec_alloc_context3(codec_);
     if(!codecContext_)
-    {
-        Close();
         return false;
-    }
 
-    //设置编码器上下文参数
-    codecContext_->sample_rate = config.audio.samplerate;
-    codecContext_->sample_fmt = AV_SAMPLE_FMT_FLTP;
-    codecContext_->channels = config.audio.channels;
-    codecContext_->channel_layout = av_get_default_channel_layout(config.audio.channels);
-    codecContext_->bit_rate = config.audio.bitrate;
-    //获取全局的AAC头部
-    codecContext_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    //打开编码器
-    if(avcodec_open2(codecContext_,codec_,NULL) != 0)
-    {
-        Close();
+    // 配置编码参数
+    codecContext_->sample_rate    = config.audio.samplerate;// 设置采样率
+    codecContext_->sample_fmt     = AV_SAMPLE_FMT_FLTP;// 设置输出格式为浮点 PCM
+    codecContext_->channels       = config.audio.channels;// 设置声道数
+    codecContext_->channel_layout = av_get_default_channel_layout(config.audio.channels);// 设置声道布局
+    codecContext_->bit_rate       = config.audio.bitrate;// 设置码率
+    codecContext_->flags         |= AV_CODEC_FLAG_GLOBAL_HEADER;// 设置全局头部标志
+
+    if(avcodec_open2(codecContext_, codec_, NULL) < 0)// 打开编码器
         return false;
-    }
 
-    //创建重采样对象
+    // 创建并初始化重采样器
     audio_resampler_.reset(new AudioResampler());
-    //初始化这个重采样对象 将格式转为AV_SAMPLE_FMT_FLTP
-    if(!audio_resampler_->Open(config.audio.samplerate,
-                                config.audio.channels,
-                                config.audio.format,
-                                config.audio.samplerate,
-                                config.audio.channels,
-                                AV_SAMPLE_FMT_FLTP))
+    if(!audio_resampler_->Open(
+            config.audio.samplerate,
+            config.audio.channels,
+            config.audio.format,
+            config.audio.samplerate,
+            config.audio.channels,
+            AV_SAMPLE_FMT_FLTP))
     {
-        Close();
         return false;
     }
 
@@ -70,83 +72,71 @@ bool AudioEncoder::Open(AVConfig &config)
     return true;
 }
 
+/**
+ * @brief 关闭编码器并释放重采样器资源
+ */
 void AudioEncoder::Close()
 {
     if(audio_resampler_)
     {
         audio_resampler_->Close();
         audio_resampler_.reset();
-        audio_resampler_ = nullptr;
     }
+    EncodBase::Close();
 }
 
+/**
+ * @brief 获取编码器的帧样本数，用于数据分包
+ * @return 单帧样本数，编码器初始化后有效
+ */
 uint32_t AudioEncoder::GetFrameSamples()
 {
-    //获取帧数
     if(is_initialzed_)
-    {
         return codecContext_->frame_size;
-    }
-
     return 0;
 }
 
+/**
+ * @brief 对输入的 PCM 数据进行重采样并编码为 AAC
+ * @param pcm     输入 PCM 原始数据指针
+ * @param samples PCM 样本帧数
+ * @return 返回编码后的 AVPacketPtr，失败返回 nullptr
+ */
 AVPacketPtr AudioEncoder::Encode(const uint8_t *pcm, int samples)
 {
+    // 1. 准备输入帧
     AVFramePtr in_frame(av_frame_alloc(),[](AVFrame* ptr){av_frame_free(&ptr);});
-    //初始化这个输入FRAME
-    in_frame->sample_rate = codecContext_->sample_rate;
-    in_frame->format = AV_SAMPLE_FMT_FLT;
-    in_frame->channels = codecContext_->channels;
-    in_frame->channel_layout = codecContext_->channel_layout;
-    in_frame->nb_samples = samples;
-    in_frame->pts = pts_;
-    in_frame->pts = av_rescale_q(pts_,{1,codecContext_->sample_rate},codecContext_->time_base);
-    pts_ += in_frame->nb_samples;
+    in_frame->sample_rate    = codecContext_->sample_rate;// 设置采样率
+    in_frame->format         = config_.audio.format;// 设置输入格式
+    in_frame->channels       = codecContext_->channels;//  设置声道数
+    in_frame->channel_layout = codecContext_->channel_layout;// 设置声道布局
+    in_frame->nb_samples     = samples;// 设置样本数
+    in_frame->pts            = av_rescale_q(pts_,{1,codecContext_->sample_rate},codecContext_->time_base);// 设置时间戳
+    pts_ += in_frame->nb_samples;// 更新时间戳
 
-    //创建内存
-    if(av_frame_get_buffer(in_frame.get(),0) < 0)
-    {
+    if(av_frame_get_buffer(in_frame.get(), 0) < 0)// 分配输入帧的缓冲区
         return nullptr;
-    }
 
-    //计算位数
-    int bytes_per_samples = av_get_bytes_per_sample(config_.audio.format);
-    if(bytes_per_samples == 0)
-    {
+    int bytes_per_sample = av_get_bytes_per_sample(config_.audio.format);// 获取每个样本的字节数
+    if(bytes_per_sample <= 0)
         return nullptr;
-    }
+    memcpy(in_frame->data[0], pcm, bytes_per_sample * samples * in_frame->channels);// 将 PCM 数据复制到输入帧的缓冲区
 
-    //接下来开始拷贝内存 pcm->in_frame
-    memcpy(in_frame->data[0],pcm,bytes_per_samples * in_frame->channels * samples);
+    // 2. 重采样
+    AVFramePtr fltp_frame;
+    if(audio_resampler_->Convert(in_frame, fltp_frame) <= 0)// 执行重采样，将 PCM 转换为浮点格式
+        return nullptr;
 
-    //在开始重采样
-    AVFramePtr fltp_frame = nullptr;
-    if(audio_resampler_->Convert(in_frame,fltp_frame) <= 0)
-    {
+    // 3. 送入编码器
+    if(avcodec_send_frame(codecContext_, fltp_frame.get()) < 0)// 发送重采样后的帧到编码器
         return nullptr;
-    }
 
-    //我们开始编码数据
-    int ret = avcodec_send_frame(codecContext_,fltp_frame.get());
-    if(ret != 0)
-    {
+    // 4. 接收编码包
+    AVPacketPtr packet(av_packet_alloc(),[](AVPacket* ptr){av_packet_free(&ptr);});// 分配 AVPacket 用于接收编码后的数据
+    av_init_packet(packet.get());
+    int ret = avcodec_receive_packet(codecContext_, packet.get());// 从编码器接收编码后的数据包
+    if(ret < 0)
         return nullptr;
-    }
 
-    AVPacketPtr av_packet(av_packet_alloc(),[](AVPacket* ptr){av_packet_free(&ptr);});
-    //初始化这个packet
-    av_init_packet(av_packet.get());
-    //开始接收packet
-    ret = avcodec_receive_packet(codecContext_,av_packet.get());
-    if(ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-    {
-        return nullptr;
-    }
-    else if(ret < 0)
-    {
-        return nullptr;
-    }
-    //接收成功
-    return av_packet;
+    return packet;
 }
