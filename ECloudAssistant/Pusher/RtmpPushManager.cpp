@@ -1,15 +1,29 @@
-﻿#include "RtmpPushManager.h"
+﻿/**
+ * @file RtmpPushManager.cpp
+ * @brief RTMP 推流管理器实现
+ *
+ * 实现 RtmpPushManager 类的各方法，包括初始化、打开推流、
+ * 音视频采集/编码、推送、关闭和清理流程。
+ */
+
+#include "RtmpPushManager.h"
 #include "GDISreenScapture.h"
 #include "AAC_Encoder.h"
 #include "H264Encoder.h"
 #include "AudioCapture.h"
 #include "H264Paraser.h"
 
+/**
+ * @brief 析构函数，调用 Close 停止推流并释放资源
+ */
 RtmpPushManager::~RtmpPushManager()
 {
     Close();
 }
 
+/**
+ * @brief 构造函数，创建事件循环
+ */
 RtmpPushManager::RtmpPushManager()
     :aac_encoder_(nullptr)
     ,h264_encoder_(nullptr)
@@ -20,6 +34,11 @@ RtmpPushManager::RtmpPushManager()
     loop_ = new EventLoop(1);
 }
 
+/**
+ * @brief 打开并启动推流
+ * @param str RTMP 推流地址（如 rtmp://host/app/stream）
+ * @return true 成功，false 失败
+ */
 bool RtmpPushManager::Open(const QString &str)
 {
     if(!Init())
@@ -45,6 +64,10 @@ bool RtmpPushManager::Open(const QString &str)
     return true;
 }
 
+/**
+ * @brief 初始化采集、编码和推流器
+ * @return true 成功，false 失败
+ */
 bool RtmpPushManager::Init()
 {
     //创建一个推流器
@@ -90,14 +113,14 @@ bool RtmpPushManager::Init()
         return false;
     }
     //获取sps pps
-    H264Paraser::Nal sps = H264Paraser::findNal(extradata,extradatdSize);
+    H264Paraser::Nal sps = H264Paraser::findNal(extradata,extradatdSize);// sps数据
     if(sps.first != nullptr && sps.second != nullptr && (*sps.first & 0x1f) == 7)//sps数据
     {
-        mediaInfo.sps_size = sps.second - sps.first + 1;
-        mediaInfo.sps.reset(new uint8_t[mediaInfo.sps_size],std::default_delete<uint8_t[]>());
-        memcpy(mediaInfo.sps.get(),sps.first,mediaInfo.sps_size);
+        mediaInfo.sps_size = sps.second - sps.first + 1;// sps数据大小
+        mediaInfo.sps.reset(new uint8_t[mediaInfo.sps_size],std::default_delete<uint8_t[]>());// 分配内存
+        memcpy(mediaInfo.sps.get(),sps.first,mediaInfo.sps_size);// 拷贝sps数据
         //pps
-        H264Paraser::Nal pps = H264Paraser::findNal(sps.second,extradatdSize - (sps.second - (uint8_t*)extradata));
+        H264Paraser::Nal pps = H264Paraser::findNal(sps.second,extradatdSize - (sps.second - (uint8_t*)extradata));// pps数据
         if(pps.first != nullptr && pps.second != nullptr && (*pps.first & 0x1f) == 8)//pps数据
         {
             mediaInfo.pps_size = pps.second - pps.first + 1;
@@ -118,6 +141,9 @@ bool RtmpPushManager::Init()
     return true;
 }
 
+/**
+ * @brief 停止推流并释放所有资源
+ */
 void RtmpPushManager::Close()
 {
     //释放资源
@@ -135,6 +161,9 @@ void RtmpPushManager::Close()
 
 }
 
+/**
+ * @brief 视频采集、编码和推送循环
+ */
 void RtmpPushManager::EncodeVideo()
 {
     //我们控制发送速率 每一秒发送30张
@@ -180,6 +209,9 @@ void RtmpPushManager::EncodeVideo()
     }
 }
 
+/**
+ * @brief 音频采集、编码和推送循环
+ */
 void RtmpPushManager::EncodeAudio()
 {
     //准备buffer存放音频数据
@@ -209,6 +241,9 @@ void RtmpPushManager::EncodeAudio()
     }
 }
 
+/**
+ * @brief 等待编码线程退出并销毁编码器
+ */
 void RtmpPushManager::StopEncoder()
 {
     if(audioCaptureThread_)
@@ -243,6 +278,9 @@ void RtmpPushManager::StopEncoder()
     }
 }
 
+/**
+ * @brief 停止采集线程并销毁采集器
+ */
 void RtmpPushManager::StopCapture()
 {
     if(audio_Capture_)
@@ -260,6 +298,12 @@ void RtmpPushManager::StopCapture()
     }
 }
 
+/**
+ * @brief 判断 H.264 数据是否关键帧（I 帧）
+ * @param data NAL 单元数据指针
+ * @param size 数据长度
+ * @return true 表示关键帧，false 表示非关键帧
+ */
 bool RtmpPushManager::IsKeyFrame(const uint8_t *data, uint32_t size)
 {
     //判断关键帧 startcode 3 4
@@ -282,6 +326,11 @@ bool RtmpPushManager::IsKeyFrame(const uint8_t *data, uint32_t size)
     return false;
 }
 
+/**
+ * @brief 去除起始码并推送视频数据
+ * @param data H.264 NALU 数据指针
+ * @param size 数据长度
+ */
 void RtmpPushManager::PushVideo(const quint8 *data, quint32 size)
 {
     //推送视频
@@ -293,12 +342,17 @@ void RtmpPushManager::PushVideo(const quint8 *data, quint32 size)
     {
         if(pusher_ && pusher_->IsConnected())
         {
-            pusher_->PushVideoFrame(frame.get(),size - 4);
+            pusher_->PushVideoFrame(frame.get(),size - 4);// 去除起始码, 进行推送
         }
     }
 
 }
 
+/**
+ * @brief 推送音频数据
+ * @param data AAC 原始帧数据指针
+ * @param size 数据长度
+ */
 void RtmpPushManager::PushAudio(const quint8 *data, quint32 size)
 {
     std::shared_ptr<uint8_t> frame(new uint8_t[size],std::default_delete<uint8_t[]>());

@@ -1,7 +1,21 @@
-﻿#include "AVDEMuxer.h"
+﻿/**
+ * @file AVDEMuxer.cpp
+ * @brief AVDEMuxer 类实现
+ *
+ * 实现了基于 FFmpeg 的媒体流打开、异步读取、音视频流分发
+ * 到 AAC 和 H.264 解码器的完整过程。
+ */
+
+#include "AVDEMuxer.h"
 #include "H264_Decoder.h"
 #include "AAC_Decoder.h"
 
+/**
+ * @brief 构造函数
+ * @param ac 外部 AVContext，用于保存音视频时长等信息
+ *
+ * 初始化解码器实例、创建格式化上下文并设置中断回调和字典选项。
+ */
 AVDEMuxer::AVDEMuxer(AVContext *ac)
     :avContext_(ac)
     ,avDict_(nullptr)
@@ -36,11 +50,21 @@ AVDEMuxer::AVDEMuxer(AVContext *ac)
     pFormateCtx_->flags |= AVFMT_FLAG_DISCARD_CORRUPT;//加速
 }
 
+/**
+ * @brief 析构函数
+ *
+ * 调用 Close() 停止读取线程并释放所有内部资源。
+ */
 AVDEMuxer::~AVDEMuxer()
 {
     Close();
 }
 
+/**
+ * @brief 打开媒体流并启动异步读取线程
+ * @param path 流媒体地址或文件路径
+ * @return 始终返回 true（线程启动成功）
+ */
 bool AVDEMuxer::Open(const std::string &path)
 {
     //启动线程去查询流消息
@@ -50,6 +74,11 @@ bool AVDEMuxer::Open(const std::string &path)
     return true;
 }
 
+/**
+ * @brief 关闭读取线程并释放资源
+ *
+ * 设置退出标志，释放字典、等待线程结束并关闭格式化上下文。
+ */
 void AVDEMuxer::Close()
 {
     //将退出标志置为true;
@@ -78,6 +107,13 @@ void AVDEMuxer::Close()
 
 }
 
+/**
+ * @brief 异步读取媒体包并分发给对应解码器
+ * @param path 流媒体地址或文件路径
+ *
+ * 在单独线程中调用，先获取流信息回调，然后循环读取
+ * AVPacket 并根据 stream_index 转发给 h264Decoder_ 或 aacDecoder_。
+ */
 void AVDEMuxer::FetchStream(const std::string &path)
 {
     bool ret = true;
@@ -126,6 +162,11 @@ void AVDEMuxer::FetchStream(const std::string &path)
 
 }
 
+/**
+ * @brief 打开并解析流信息，查找音视频流并初始化解码器
+ * @param path 流媒体地址或文件路径
+ * @return 成功返回 true，失败返回 false
+ */
 bool AVDEMuxer::FetchStreamInfo(const std::string &path)
 {
     //获取流信息
@@ -180,17 +221,30 @@ bool AVDEMuxer::FetchStreamInfo(const std::string &path)
     return true;
 }
 
+/**
+ * @brief 获取音频总时长（秒）
+ * @return 音频时长
+ */
 double AVDEMuxer::audioDuration()
 {
     //音频时长
     return avContext_->audioDuration;
 }
 
+/**
+ * @brief 获取视频总时长（秒）
+ * @return 视频时长
+ */
 double AVDEMuxer::videoDuration()
 {
     return avContext_->videoDuration;
 }
 
+/**
+ * @brief 中断回调函数，用于异步读取时检测退出标志
+ * @param arg 指向 AVDEMuxer 实例的指针
+ * @return 非零值表示中断读取
+ */
 int AVDEMuxer::InterruptFouction(void *arg)
 {
     //退出标志

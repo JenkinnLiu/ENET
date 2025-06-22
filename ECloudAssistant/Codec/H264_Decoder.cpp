@@ -1,6 +1,19 @@
-﻿#include "H264_Decoder.h"
+﻿/**
+ * @file H264_Decoder.cpp
+ * @brief H.264 视频解码器实现
+ *
+ * 实现 H264_Decoder 类，包括解码器初始化、解码循环
+ * 和将解码后的视频帧 YUV 格式化并推送到 AVContext。
+ */
+
+#include "H264_Decoder.h"
 #include "VideoConvert.h"
 
+/**
+ * @brief 构造函数
+ * @param ac 外部 AVContext 指针，用于存储解码输出
+ * @param parent 可选 QThread 父对象指针
+ */
 H264_Decoder::H264_Decoder(AVContext *ac, QObject *parent)
     :QThread(parent)
     ,avContext_(ac)
@@ -9,11 +22,28 @@ H264_Decoder::H264_Decoder(AVContext *ac, QObject *parent)
     yuv_frame_ = AVFramePtr(av_frame_alloc(),[](AVFrame* p){av_frame_free(&p);});
 }
 
+/**
+ * @brief 析构函数
+ *
+ * 调用 Close() 停止解码并释放资源。
+ */
 H264_Decoder::~H264_Decoder()
 {
     Close();
 }
 
+/**
+ * @brief 打开 H.264 解码器并初始化像素转换器
+ * @param codecParamer 包含宽、高、编码格式等参数的结构体
+ * @return 0 成功，-1 失败
+ *
+ * 步骤：
+ *  1. 查找解码器并分配上下文
+ *  2. 将流参数拷贝到上下文并打开解码器
+ *  3. 更新 AVContext 中的视频宽高和格式信息
+ *  4. 初始化 VideoConverter 进行 YUV 转换
+ *  5. 启动解码线程
+ */
 int H264_Decoder::Open(const AVCodecParameters *codecParamer)
 {
     //i
@@ -63,6 +93,9 @@ int H264_Decoder::Open(const AVCodecParameters *codecParamer)
     return 0;
 }
 
+/**
+ * @brief 关闭解码器线程
+ */
 void H264_Decoder::Close()
 {
     quit_ = true;
@@ -73,6 +106,13 @@ void H264_Decoder::Close()
     }
 }
 
+/**
+ * @brief 解码线程入口函数
+ *
+ * 不断从 packet 队列取出 H.264 包，调用 avcodec_send_packet
+ * 和 avcodec_receive_frame 解码为 YUV 原始帧，然后通过 VideoConverter
+ * 转换为目标像素格式并推送到 AVContext 的视频队列。
+ */
 void H264_Decoder::run()
 {
     //解码线程

@@ -1,6 +1,19 @@
-﻿#include "AAC_Decoder.h"
+﻿/**
+ * @file AAC_Decoder.cpp
+ * @brief AAC 音频解码器实现
+ *
+ * 实现 AAC_Decoder 类，包括解码器打开、异步解码循环、
+ * 重采样以及将 PCM 帧推送到 AVContext 队列的逻辑。
+ */
+
+#include "AAC_Decoder.h"
 #include "Audio_Resampler.h"
 
+/**
+ * @brief 构造函数
+ * @param ac 外部 AVContext 指针，用于存储解码结果
+ * @param parent 可选的 QObject 父对象指针
+ */
 AAC_Decoder::AAC_Decoder(AVContext *ac, QObject *parent)
     :QThread(parent)
     ,avContext_(ac)
@@ -8,11 +21,28 @@ AAC_Decoder::AAC_Decoder(AVContext *ac, QObject *parent)
     audioResampler_.reset(new AudioResampler());
 }
 
+/**
+ * @brief 析构函数
+ *
+ * 调用 Close() 停止解码线程并释放资源。
+ */
 AAC_Decoder::~AAC_Decoder()
 {
     Close();
 }
 
+/**
+ * @brief 打开 AAC 解码器并初始化重采样器
+ * @param codecParamer AVCodecParameters 指针，包含编码参数
+ * @return 0 成功，-1 失败
+ *
+ * 步骤：
+ *  1. 查找并创建 AAC 解码器上下文
+ *  2. 将参数复制到解码器上下文
+ *  3. 打开解码器并启用快速解码标志
+ *  4. 配置目标采样率、声道和样本格式
+ *  5. 打开重采样器并启动解码线程
+ */
 int AAC_Decoder::Open(const AVCodecParameters *codecParamer)
 {
     //初始化解码器，通过codecParamer解码参数来去初始化
@@ -59,6 +89,9 @@ int AAC_Decoder::Open(const AVCodecParameters *codecParamer)
     return 0;
 }
 
+/**
+ * @brief 关闭解码器线程并释放资源
+ */
 void AAC_Decoder::Close()
 {
     //将标志位置为true
@@ -70,6 +103,13 @@ void AAC_Decoder::Close()
     }
 }
 
+/**
+ * @brief 解码线程入口函数
+ *
+ * 从队列中取出 AAC 数据包，调用 avcodec_send_packet
+ * 和 avcodec_receive_frame 解码并对每帧做重采样，
+ * 最后将 PCM 数据帧推送到 AVContext 的音频队列。
+ */
 void AAC_Decoder::run()
 {
     //解码线程

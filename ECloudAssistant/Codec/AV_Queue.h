@@ -7,6 +7,7 @@ class AVList {
 public:
     AVList() : head_(nullptr), tail_(nullptr), size_(0) {}
     ~AVList() { clear(); }
+    //环形缓冲区
     void push(const T& value) {
         std::unique_lock<std::mutex> lock(mutex_);
         Node* node = new Node(value);
