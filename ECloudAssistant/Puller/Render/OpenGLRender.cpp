@@ -133,11 +133,11 @@ void OpenGLRender::initializeGL()
     //初始化opengl
     initializeOpenGLFunctions();
 
-    //加载脚本 顶点着色器，片段着色器
+    //加载 顶点着色器，片段着色器
     program_ = new QOpenGLShaderProgram();
     program_->addShaderFromSourceFile(QOpenGLShader::Vertex,":/UI/brown/vertex.vsh");// 顶点着色器
     program_->addShaderFromSourceFile(QOpenGLShader::Fragment,":/UI/brown/fragment.fsh");// 片段着色器
-    //链接
+    //链接 着色器程序
     program_->link();
 
     //绑定YUV变量值
@@ -312,6 +312,7 @@ void OpenGLRender::Repaint(AVFramePtr frame)
     repaintTexYUV420P(frame);
     //调用这个paintGL()来去绘制
     this->update();//调用这个update()会自动调用这个paintGL
+    //这是一个非阻塞函数，它会向 Qt 的事件循环请求一次重绘。Qt 会在合适的时机自动调用 `paintGL()`。
 }
 
 /**
@@ -392,7 +393,7 @@ void OpenGLRender::repaintTexYUV420P(AVFramePtr frame)
     //传值
     options_.setImageHeight(frame->height);
     options_.setRowLength(frame->linesize[0]);
-    //设置图片数据
+    //设置图片数据, YUV420P的YUV数据是分开的,
     texY_->setData(QOpenGLTexture::Red,QOpenGLTexture::UInt8,static_cast<const void*>(frame->data[0]),&options_);
     options_.setRowLength(frame->linesize[1]);
     texU_->setData(QOpenGLTexture::Red,QOpenGLTexture::UInt8,static_cast<const void*>(frame->data[1]),&options_);

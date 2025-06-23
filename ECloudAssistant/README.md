@@ -1053,7 +1053,7 @@ AudioRender 的工作流程主要分成“初始化”、“查询缓冲”、�
 
 这样，上层调用 `Write()` 时只是把原始 PCM 数据丢给 `QIODevice`，Qt 和系统音频子系统会自动负责把声音“送到”真实的播放设备上。
 
-## 视频渲染OpenGL
+## 视频硬件加速渲染OpenGL
 ![alt text](image/image-12.png)
 ![alt text](image/image-13.png)
 ![alt text](image/image-14.png)
@@ -1069,7 +1069,7 @@ AudioRender 的工作流程主要分成“初始化”、“查询缓冲”、�
 2.  **编译着色器**:
     *   创建一个 `QOpenGLShaderProgram` 对象。
     *   加载顶点着色器 (`.vsh`) 和片段着色器 (`.fsh`) 的源码。这两个文件被编译到 Qt 的资源文件中，所以可以用 `:/` 路径访问。
-    *   **顶点着色器**：非常简单，它的任务是接收顶点坐标 (`aPos`) 和纹理坐标 (`aTexCoord`)，然后把它们原封不动地传递给下一阶段。
+    *   **顶点着色器**：非常简单，它的任务是接收顶点坐标 (`aPos`) 和纹理坐标 (`aTexCoord`)，然后把它们原封不动地传递给下一阶段。搭一个矩形框架即可。
     *   **片段着色器**：这是渲染的核心。它接收从顶点着色器传来的纹理坐标，然后用这个坐标分别从 Y、U、V 三个纹理中采样，得到 YUV 值。最后，它通过一个标准的数学公式，在 GPU 上实时地将 YUV 颜色转换为 RGB 颜色，并输出到屏幕。
     *   调用 `program_->link()` 将两个着色器链接成一个完整的 GPU 程序。
 3.  **设置顶点数据**:
@@ -1100,6 +1100,7 @@ AudioRender 的工作流程主要分成“初始化”、“查询缓冲”、�
     *   设置纹理的过滤方式（`Linear`，线性插值，使画面更平滑）和格式（`R8_UNorm`，表示这是一个单通道 8 位无符号归一化纹理）。
     *   调用 `allocateStorage()` 为纹理在 GPU 上分配显存。
 3.  **上传数据**: `repaintTexYUV420P` 回到主流程，使用 `tex->setData()` 函数，将 `AVFrame` 中的 `data[0]` (Y)、`data[1]` (U)、`data[2]` (V) 的像素数据分别上传到对应的三个纹理中。这里会正确设置 `linesize`（行字节数）以处理内存对齐问题。
+tex->setData() 就是一座桥梁，它负责将 AVFrame 中的 Y、U、V 三个分量的像素数据，分别拷贝到 GPU 上对应的三个纹理对象 (texY_, texU_, texV_) 中。
 
 ### 4. 渲染绘制 (`paintGL`)
 
@@ -1127,3 +1128,514 @@ AudioRender 的工作流程主要分成“初始化”、“查询缓冲”、�
 当 `OpenGLRender` 对象被销毁时，析构函数会确保所有申请的 OpenGL 资源被正确释放，包括 VBO、EBO、VAO 和三个纹理，防止显存泄漏。
 
 通过这一整套流程，`OpenGLRender` 实现了一个高效、健壮的视频渲染器，它将复杂的 YUV 到 RGB 转换和绘制工作完全交给了 GPU，极大地解放了 CPU，保证了流畅的播放体验。
+
+## 着色器的作用
+好的，我们来详细解释一下这两个概念以及它们在这个项目中的具体作用。
+
+### 什么是顶点着色器和片段着色器？
+
+**着色器（Shader）** 可以理解为运行在 **GPU（显卡）** 上的、专门用于图形计算的微型程序。现代图形渲染管线是可编程的，而着色器就是我们编写的、用于控制管线特定阶段的代码。其中最核心、最常用的两个就是顶点着色器和片段着色器。
+
+#### 1. 顶点着色器 (Vertex Shader)
+
+*   **作用对象**：**每一个顶点 (Vertex)**。
+*   **核心任务**：计算每个顶点的**最终位置**。它接收模型原始的顶点坐标（例如，一个立方体的八个角点），然后通过一系列数学变换（如模型、视图、投影矩阵变换），计算出这个顶点最终应该出现在屏幕上的哪个位置（裁剪空间坐标）。
+*   **其他任务**：它可以向下一个阶段（片段着色器）传递数据。例如，它可以把顶点的颜色、法线、或者**纹理坐标**传递下去。
+*   **简单比喻**：它就像一个“骨架操纵师”，负责确定一个物体的基本形状和在屏幕上的位置。
+
+#### 2. 片段着色器 (Fragment Shader)
+
+*   **作用对象**：**每一个片段 (Fragment)**。一个“片段”可以看作一个“准像素”，它包含了计算一个像素最终颜色所需的所有信息。
+*   **核心任务**：计算每个片段的**最终颜色**。它接收从顶点着色器传递并经过**插值**的数据（例如，一个三角形内部某一点的纹理坐标，是由其三个顶点的纹理坐标插值计算得出的）。
+*   **工作方式**：它利用接收到的数据（如纹理坐标、光照信息等）进行计算，最终输出一个 RGBA 颜色值。这个颜色值就是你在屏幕上看到的那个像素的颜色。
+*   **简单比喻**：它就像一个“上色师”或“像素画家”，负责为物体的表面填充颜色和细节。
+
+---
+
+### 这里的两个着色器有什么用？
+
+在这个项目中，我们的目标是在一个矩形区域内显示视频。这两个着色器协同工作，高效地完成了这个任务。
+
+#### 1. 顶点着色器 (`vertexShaderSource`) 的作用
+
+```glsl
+// ...existing code...
+const char* vertexShaderSource = "#version 330 core\n"
+    "layout (location = 0) in vec3 aPos;\n"
+    "layout (location = 1) in vec2 aTexCoord;\n"
+    "out vec2 TexCoord;\n"
+    "void main()\n"
+    "{\n"
+    "   gl_Position = vec4(aPos, 1.0);\n"
+    "   TexCoord = aTexCoord;\n"
+    "}";
+// ...existing code...
+```
+
+这个顶点着色器非常简单，它做了两件事：
+
+1.  **`gl_Position = vec4(aPos, 1.0);`**: 它直接将输入的顶点位置 `aPos` 作为最终输出位置。因为我们只是想画一个填满视口的2D矩形，所以不需要进行复杂的3D变换。
+2.  **`TexCoord = aTexCoord;`**: 它将输入的纹理坐标 `aTexCoord` **原封不动地传递**给片段着色器。这是关键的一步，它告诉片段着色器，“对于屏幕上的这个点，你应该去纹理的哪个位置采样颜色”。
+
+**总结：它的作用就是画一个矩形，并为这个矩形的每个像素准备好正确的纹理坐标。**
+
+#### 2. 片段着色器 (`fragmentShaderSource`) 的作用
+
+```glsl
+// ...existing code...
+const char* fragmentShaderSource = "#version 330 core\n"
+    "out vec4 FragColor;\n"
+    "in vec2 TexCoord;\n"
+    "uniform sampler2D textureY;\n"
+    "uniform sampler2D textureU;\n"
+    "uniform sampler2D textureV;\n"
+    "void main()\n"
+    "{\n"
+    "   float y = texture(textureY, TexCoord).r;\n"
+    "   float u = texture(textureU, TexCoord).r - 0.5;\n"
+    "   float v = texture(textureV, TexCoord).r - 0.5;\n"
+    "   float r = y + 1.402 * v;\n"
+    "   float g = y - 0.344 * u - 0.714 * v;\n"
+    "   float b = y + 1.772 * u;\n"
+    "   FragColor = vec4(r, g, b, 1.0);\n"
+    "}";
+// ...existing code...
+```
+
+这个片段着色器是整个渲染过程的核心，它的作用是 **在 GPU 上实时地将 YUV 颜色转换为 RGB 颜色**。
+
+1.  **`in vec2 TexCoord;`**: 接收从顶点着色器传来的、经过插值的纹理坐标。
+2.  **`uniform sampler2D textureY, textureU, textureV;`**: 声明了三个纹理采样器，分别对应我们从 C++ 代码中上传的 Y、U、V 三个分量的纹理。
+3.  **`float y = texture(textureY, TexCoord).r;`**: 使用 `texture()` 函数和传入的 `TexCoord`，从 Y 纹理中采样亮度值。因为 YUV 的每个分量都是单通道的灰度图，所以我们只取其红色通道 `.r` 的值就足够了。
+4.  **`float u = ... - 0.5;` 和 `float v = ... - 0.5;`**: 同样地，从 U 和 V 纹理中采样色度值。减去 0.5 是因为在标准的 YUV 转换公式中，U 和 V 分量需要以 0 为中心（范围从 -0.5 到 +0.5）。
+5.  **`float r = ...; float g = ...; float b = ...;`**: 这三行是**标准的 YUV 到 RGB 的转换公式**。GPU 会为矩形内的**每一个像素**并行地执行这个计算。
+6.  **`FragColor = vec4(r, g, b, 1.0);`**: 将计算出的最终 RGB 颜色（Alpha通道设为1.0，即不透明）作为这个像素的输出颜色。
+
+**总结：它的作用是接收纹理坐标，从 Y、U、V 三个独立的纹理中采样，然后在 GPU 上飞快地完成颜色空间转换，计算出每个像素最终应该显示的 RGB 颜色。**
+
+通过这种方式，我们将繁重的颜色转换计算从 CPU 转移到了高度并行的 GPU 上，从而实现了极为高效流畅的视频播放。
+
+
+好的，我们来详细解释一下这三个在现代 OpenGL 中至关重要的概念，以及它们在这个项目中的具体作用。
+
+可以把这三者想象成一套高效的“绘图工具箱”：
+
+*   **VBO (顶点缓冲对象)**：是装满“原材料”（顶点数据）的仓库。
+*   **EBO (元素缓冲对象)**：是“施工蓝图”（顶点索引）。
+*   **VAO (顶点数组对象)**：是“配置好的工具台”，它知道去哪个仓库拿原材料，并按照哪张蓝图来施工。
+
+---
+
+### 1. VBO (Vertex Buffer Object) - 顶点缓冲对象
+
+*   **是什么？**
+    VBO 是 GPU 显存中的一块内存区域，专门用来存储大量的顶点数据，例如顶点坐标、颜色、法线、**纹理坐标**等。它的主要目的是一次性地将所有顶点数据从 CPU 内存发送到 GPU 显存，避免在每一帧都重复发送，从而极大地提升了渲染效率。
+
+*   **在这里有什么用？**
+    在 OpenGLRender.cpp 中，我们定义了一个静态数组 `vertices`：
+    ```cpp
+    static GLfloat vertices[] = {
+        // 位置坐标      // 纹理坐标
+         1.0f, 1.0f, 0.0f,  1.0f, 1.0f, // 右上
+         1.0f,-1.0f, 0.0f,  1.0f, 0.0f, // 右下
+        -1.0f,-1.0f, 0.0f,  0.0f, 0.0f, // 左下
+        -1.0f, 1.0f, 0.0f,  0.0f, 1.0f  // 左上
+    };
+    ```
+    这个数组定义了一个矩形的四个顶点。每个顶点有 5 个浮点数：前 3 个是位置坐标 (x, y, z)，后 2 个是纹理坐标 (s, t)。
+
+    `initializeGL` 函数中的这几行代码就是 VBO 的作用：
+    ```cpp
+    // filepath: e:\cppprofile\ENET Demo\ECloudAssistant\Puller\Render\OpenGLRender.cpp
+    // ...existing code...
+    glGenBuffers(1, &VBO); // 在GPU上创建一个VBO
+    glBindBuffer(GL_ARRAY_BUFFER, VBO); // 将其绑定为当前操作的顶点缓冲区
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW); // 将vertices数组的数据复制到VBO中
+    // ...existing code...
+    ```
+    **作用总结：VBO 在这里就是把我们定义的那个矩形的顶点数据（位置和纹理坐标）存储到了 GPU 的显存里。**
+
+### 2. EBO (Element Buffer Object) - 元素缓冲对象
+
+*   **是什么？**
+    EBO，也常被称为索引缓冲对象 (IBO)，它同样是 GPU 显存中的一块内存。但它不存储顶点数据本身，而是存储**顶点索引**。这些索引告诉 OpenGL 应该按照什么顺序来绘制 VBO 中的顶点，从而组成几何图形（如三角形）。使用 EBO 可以有效地复用顶点，减少内存占用。
+
+*   **在这里有什么用？**
+    我们想用上面的 4 个顶点画一个矩形，而矩形是由两个三角形组成的。如果不使用 EBO，我们需要定义 6 个顶点（两个顶点会被重复定义）。但有了 EBO，我们只需定义 4 个唯一的顶点，然后用索引来告诉 OpenGL 如何组合它们。
+
+    `indices` 数组就是这个“蓝图”：
+    ```cpp
+    static GLuint indices[] = {
+        0, 1, 3, // 第一个三角形，使用顶点 0, 1, 3
+        1, 2, 3  // 第二个三角形，使用顶点 1, 2, 3
+    };
+    ```
+    `initializeGL` 函数中对应的代码：
+    ```cpp
+    // filepath: e:\cppprofile\ENET Demo\ECloudAssistant\Puller\Render\OpenGLRender.cpp
+    // ...existing code...
+    glGenBuffers(1, &EBO); // 在GPU上创建一个EBO
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO); // 绑定为当前操作的元素缓冲区
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW); // 将indices数组的数据复制到EBO中
+    // ...existing code...
+    ```
+    **作用总结：EBO 在这里存储了绘制矩形所需的顶点顺序，它告诉 GPU 如何用 VBO 中的 4 个顶点画出两个三角形，从而拼成一个完整的矩形。**
+
+### 3. VAO (Vertex Array Object) - 顶点数组对象
+
+*   **是什么？**
+    VAO 是一个“状态容器”。它可以**记录**所有与顶点数据相关的配置状态。这包括：
+    1.  `glBindBuffer(GL_ARRAY_BUFFER, ...)` 的调用（即它“记住”了当前使用的 VBO）。
+    2.  `glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ...)` 的调用（它“记住”了当前使用的 EBO）。
+    3.  通过 `glVertexAttribPointer` 设置的顶点属性指针（它“记住”了 VBO 中的数据是如何组织的，比如前3个是位置，后2个是纹理坐标）。
+    4.  通过 `glEnableVertexAttribArray` 启用的顶点属性。
+
+*   **在这里有什么用？**
+    VAO 的作用是**简化渲染循环**。在 `initializeGL` 函数中，我们进行了一系列复杂的设置：
+    ```cpp
+    // filepath: e:\cppprofile\ENET Demo\ECloudAssistant\Puller\Render\OpenGLRender.cpp
+    // ...existing code...
+    glGenVertexArrays(1, &VAO); // 创建VAO
+    glBindVertexArray(VAO); // 绑定VAO，开始记录配置
+
+    // --- 以下所有配置都会被记录在VAO中 ---
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glVertexAttribPointer(posAttr, ...); // 配置位置属性
+    glEnableVertexAttribArray(posAttr);
+    glVertexAttribPointer(texCord, ...); // 配置纹理坐标属性
+    glEnableVertexAttribArray(texCord);
+    // --- 配置记录结束 ---
+
+    glBindVertexArray(0); // 解绑VAO，防止后续误操作
+    // ...existing code...
+    ```
+    完成这些设置后，所有关于“如何从 VBO 和 EBO 中读取数据来画矩形”的指令都被保存在了 VAO 中。
+
+    这样，在每一帧的 `paintGL` 函数中，我们不再需要重复绑定 VBO、EBO 和设置属性指针。我们只需要：
+    ```cpp
+    // filepath: e:\cppprofile\ENET Demo\ECloudAssistant\Puller\Render\OpenGLRender.cpp
+    // ...existing code...
+    glBindVertexArray(VAO); // 绑定VAO，一瞬间恢复所有配置
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr); // 执行绘制
+    // ...existing code...
+    ```
+    **作用总结：VAO 在这里就像一个快捷方式。它将所有关于顶点数据的繁琐设置打包在一起。在渲染时，我们只需绑定这个 VAO，就可以立即恢复所有状态，然后发出绘制命令，大大简化了代码并提高了效率。**
+
+
+## paintGL的调用
+`paintGL()` **不是由我们自己的代码直接调用的**，而是由 **Qt 的事件循环系统**在需要重绘窗口时自动调用的。
+
+在这个项目中，`paintGL()` 的调用流程是这样的：
+
+1.  **外部触发**: 解码线程成功解码出一帧新的视频数据 (`AVFramePtr`)。
+2.  **调用入口函数**: 解码线程调用 `OpenGLRender::Repaint(frame)` 函数，并将新的视频帧作为参数传递进去。
+3.  **请求重绘**: 在 `Repaint` 函数的末尾，会执行这一行关键代码：
+    ```cpp
+    // filepath: e:\cppprofile\ENET Demo\ECloudAssistant\Puller\Render\OpenGLRender.cpp
+    // ...existing code...
+    //调用这个paintGL()来去绘制
+    this->update();//调用这个update()会自动调用这个paintGL
+    // ...existing code...
+    ```
+4.  **调度事件**: `this->update()` 是一个**非阻塞**函数。它并不会立即调用 `paintGL()`。相反，它会向 Qt 的事件循环系统发送一个“重绘请求”（Paint Event），告诉 Qt：“这个窗口部件的内容已经过时了，请在方便的时候重新绘制它。”
+5.  **事件循环处理**: Qt 的事件循环在处理到这个重绘请求时，就会自动调用 `OpenGLRender` 对象的 `paintGL()` 方法，从而执行真正的绘制操作。
+
+**总结一下，完整的调用链是：**
+
+**解码线程 → `Repaint(frame)` → `update()` → Qt 事件循环 → `paintGL()`**
+
+### 为什么是 `update()` 而不是直接调用 `paintGL()`？
+
+这种机制有几个好处：
+
+*   **高效**: 如果在短时间内多次调用 `update()`（例如，视频帧率非常高），Qt 可能会将这些请求合并成一次重绘，避免了不必要的重复渲染，提高了性能。
+*   **线程安全**: `update()` 是线程安全的，可以从任何线程（比如这里的解码线程）调用。而 `paintGL()` 必须在主 GUI 线程中执行。`update()` 机制优雅地处理了这种跨线程的调用。
+*   **非阻塞**: 调用 `update()` 会立即返回，不会阻塞解码线程，保证了数据处理的流畅性。
+
+除了通过 `update()` 主动请求，在以下情况下 Qt 也会自动调用 `paintGL()`：
+
+*   窗口第一次显示时。
+*   窗口大小改变后。
+*   窗口被其他窗口遮挡后又重新显示出来时。
+
+## 远程信令处理
+![alt text](image/image-15.png)
+![alt text](image/image-16.png)
+
+好的，这是一个非常核心的问题。底层对鼠标和键盘事件的传递与模拟，是整个远程控制功能实现的关键。它主要分为两大步骤：**在控制端捕获并传递**，以及**在被控端接收并模拟**。
+
+从您提供的代码（客户端 SigConnection.cpp）中，我们可以清晰地看到**第二步：接收与模拟**的实现。
+
+---
+
+### 1. 传递：从控制端到被控端
+
+虽然这部分代码没有直接提供，但我们可以根据被控端的接收逻辑推断出控制端的工作流程：
+
+1.  **事件捕获 (Event Capture)**：
+    *   控制端的应用程序（UI部分）会监听本地的鼠标和键盘事件。例如，当用户在视频渲染窗口 (`OpenGLRender`) 上移动鼠标或按下键盘时，Qt的事件系统会捕获到这些动作。
+
+2.  **数据封装 (Data Encapsulation)**：
+    *   捕获到的事件不能直接发送，需要被转换成一种标准化的、跨网络传输的格式。这就是项目中定义的各种 `_Body` 结构体的作用。
+    *   **键盘事件**: 捕获按键的**虚拟键码 (Virtual-Key Code)** 和**动作类型（按下/释放）**，打包成一个 `Key_Body` 结构体。
+    *   **鼠标点击**: 捕获**哪个按键（左/中/右）**和**动作类型（按下/释放）**，打包成一个 `Mouse_Body` 结构体。
+    *   **鼠标移动**: 为了解决控制端和被控端分辨率不同的问题，这里采用了一个非常巧妙的方法：**不发送绝对坐标，而是发送坐标比例**。控制端计算出鼠标位置相对于其视频窗口的 X、Y 比例（0.0 到 1.0 之间），然后将这个比例打包成 `MouseMove_Body` 结构体发送。
+    *   **鼠标滚轮**: 捕获滚轮滚动的**方向和幅度**，打包成 `Wheel_Body` 结构体。
+
+3.  **网络发送 (Network Sending)**：
+    *   控制端的 `SigConnection` 将封装好的结构体通过 TCP 连接发送给信令服务器。
+    *   信令服务器根据连接关系，将这个数据包**原封不动地转发**给对应的被控端。
+
+---
+
+### 2. 模拟：在被控端重现事件
+
+这部分就是您提供的代码所展示的核心逻辑。当被控端的 `SigConnection` 从网络缓冲区收到数据后：
+
+1.  **接收与解析 (Reception & Parsing)**：
+    *   [`HandleMessage`]SigConnection.cpp ) 函数根据消息头中的 `cmd` 字段，将数据包分发给对应的 `do...Event` 处理函数。
+
+2.  **核心技术：使用 Windows API 模拟输入**：
+    *   被控端使用 Windows 提供的底层 API 来将接收到的数据“注入”到操作系统中，让系统以为这些事件是由真实的物理设备产生的。
+    *   最核心的函数是 **`SendInput`**。这是一个非常强大的 API，可以精确地模拟各种输入事件。
+
+3.  **具体实现**：
+
+    *   **键盘事件 (`doKeyEvent`)**:
+        ```cpp
+        // filepath: e:\cppprofile\ENET Demo\ECloudAssistant\Net\SigConnection.cpp
+        // ...existing code...
+        INPUT input[1];
+        // ...
+        input[0].type = INPUT_KEYBOARD;
+        input[0].ki.wVk = vk; // 设置虚拟键码
+        input[0].ki.dwFlags = op; // 设置是按下(0)还是抬起(KEYEVENTF_KEYUP)
+        // ...
+        SendInput(1,input,sizeof(input)); // 发送键盘输入事件
+        // ...existing code...
+        ```
+        它构造一个 `INPUT_KEYBOARD` 类型的 `INPUT` 结构体，填入从网络包中解析出的虚拟键码和动作，然后调用 `SendInput` 来模拟一次按键。
+
+    *   **鼠标点击 (`doMouseEvent`)**:
+        ```cpp
+        // filepath: e:\cppprofile\ENET Demo\ECloudAssistant\Net\SigConnection.cpp
+        // ...existing code...
+        dwFlags |= (body->mouseButtons & MouseType::LeftButton) ? MOUSEEVENTF_LEFTDOWN : 0;
+        // ...
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = dwFlags; // 设置鼠标动作，如 MOUSEEVENTF_LEFTDOWN
+        SendInput(1,&input,sizeof(input)); // 发送鼠标输入事件
+        // ...existing code...
+        ```
+        它通过组合 `MOUSEEVENTF_*` 标志位来精确描述是哪个按键被按下或释放，然后同样用 `SendInput` 来执行。
+
+    *   **鼠标滚轮 (`doWheelEvent`)**:
+        ```cpp
+        // filepath: e:\cppprofile\ENET Demo\ECloudAssistant\Net\SigConnection.cpp
+        // ...existing code...
+        input.mi.dwFlags = MOUSEEVENTF_WHEEL;
+        input.mi.mouseData = body->wheel * 240; // 设置滚动方向和幅度
+        SendInput(1,&input,sizeof(input));
+        // ...existing code...
+        ```
+        它使用 `MOUSEEVENTF_WHEEL` 标志和 `mouseData` 字段来模拟滚轮滚动。
+
+    *   **鼠标移动 (`doMouseMoveEvent`)**:
+        ```cpp
+        // filepath: e:\cppprofile\ENET Demo\ECloudAssistant\Net\SigConnection.cpp
+        // ...existing code...
+        // 将比例乘以本地屏幕的尺寸，得到本地的绝对坐标
+        int x = static_cast<int>(combined_x * screen_->size().width() / screen_->devicePixelRatio());
+        int y = static_...
+        // 使用Qt的QCursor设置鼠标位置
+        QCursor::setPos(x,y);
+        // ...existing code...
+        ```
+        对于鼠标移动，这里使用了更上层的 Qt 函数 `QCursor::setPos()`。它首先将接收到的**坐标比例**乘以**本地屏幕的实际分辨率**，计算出应该移动到的绝对坐标，然后直接设置光标位置。这种方法对于绝对定位非常方便。
+
+### 总结
+
+| 事件类型 | 传递的信息 | 模拟技术 (在被控端) |
+| :--- | :--- | :--- |
+| **键盘** | 虚拟键码 (VK Code) + 按下/释放 | `SendInput` + `INPUT_KEYBOARD` |
+| **鼠标点击** | 哪个按键 + 按下/释放 | `SendInput` + `INPUT_MOUSE` + `MOUSEEVENTF_*DOWN/UP` |
+| **鼠标移动** | **坐标比例 (X, Y)** | `QCursor::setPos()` (内部可能调用 `SetCursorPos` API) |
+| **鼠标滚轮** | 滚动方向和幅度 | `SendInput` + `INPUT_MOUSE` + `MOUSEEVENTF_WHEEL` |
+
+通过这套“**捕获 → 封装 → 传递 → 解析 → 模拟**”的流程，项目成功地将控制端的用户操作，以一种高效且与分辨率无关的方式，在被控端的电脑上精确地重现了出来。
+
+
+好的，我们来详细描述客户端 `SigConnection` 的完整工作流程。这个类是客户端的“网络大脑”，负责与信令服务器的所有交互，并根据服务器的指令驱动本地的推流、拉流和远程控制模拟。
+
+整个流程可以根据客户端的角色（**被控端**或**控制端**）分为两条主线，但它们都始于同一个起点。
+
+---
+
+### 1. 阶段一：初始化与加入房间
+
+这是所有客户端的共同起点。
+
+1.  **构造与连接 (`SigConnection::SigConnection`)**:
+    *   当一个 `SigConnection` 对象被创建时，它已经收到了一个建立好的 TCP 套接字 (`sockfd`)。
+    *   它立即设置两个关键的**回调函数**：
+        *   `SetReadCallback`: 将底层的读事件绑定到本类的 `OnRead` 方法。从此，只要网络上有数据到达，`OnRead` 就会被调用。
+        *   `SetCloseCallback`: 将底层的断开连接事件绑定到 `OnClose` 方法。
+    *   它会获取本地主屏幕的信息 (`screen_`)，为后续模拟鼠标移动做准备。
+    *   最关键的一步：构造函数最后会立即调用 `Join()`，主动向服务器发送**加入房间**的请求，并附上自己的识别码 (`code_`)。
+
+2.  **接收服务器响应 (`doJoin`)**:
+    *   服务器收到 `Join` 请求后，会回复一个 `JoinReply` 消息。
+    *   客户端的 `OnRead` -> `HandleMessage` 流程会解析这个消息，并调用 `doJoin` 函数。
+    *   在 `doJoin` 中，如果服务器回复成功 (`S_OK`)，客户端的状态从 `NONE` 变为 `IDLE`（空闲）。
+
+    **此时，两条逻辑主线开始分化。**
+
+---
+
+### 2. 阶段二：作为被控端 (Pusher) 的流程
+
+1.  **进入空闲等待**:
+    *   `doJoin` 执行完毕后，被控端进入 `IDLE` 状态，静静地等待服务器的指令。
+
+2.  **接收创建流指令 (`doCtreatStream`)**:
+    *   当一个控制端想要连接它时，服务器会给它发送一个 `CREATESTREAM` 指令。
+    *   `HandleMessage` 将此指令分发给 `doCtreatStream`。
+    *   `doCtreatStream` 函数执行以下操作：
+        *   生成一个唯一的 RTMP 推流地址（例如 `rtmp://.../live/1`）。
+        *   调用上层注册的 `startStreamCb_` **回调函数**，将这个地址传递给 `RtmpPushManager`，命令它开始推流。
+        *   如果 `RtmpPushManager` 启动成功，它就将这个推流地址和成功状态回复给服务器。
+        *   自身状态从 `IDLE` 变为 `PUSHER`（正在推流）。
+
+3.  **接收并模拟远程控制事件**:
+    *   一旦进入 `PUSHER` 状态，它就开始接收来自服务器转发的各种控制事件。
+    *   `HandleMessage` 会根据消息类型调用不同的 `do...Event` 函数：
+        *   **`doMouseEvent`**: 接收鼠标点击事件，解析是哪个按键（左/中/右）以及动作（按下/释放），然后调用 Windows API **`SendInput`** 在本地模拟一次真实的鼠标点击。
+        *   **`doKeyEvent`**: 接收键盘事件，解析虚拟键码和动作，同样使用 **`SendInput`** 模拟一次按键。
+        *   **`doWheelEvent`**: 接收滚轮事件，使用 **`SendInput`** 模拟滚轮滚动。
+        *   **`doMouseMoveEvent`**: 接收鼠标移动事件。这里的设计非常巧妙：它接收到的是一个**坐标比例**（0.0 到 1.0）。它用这个比例乘以**本地屏幕的实际分辨率**，计算出准确的绝对坐标，然后调用 `QCursor::setPos()` 将鼠标光标移动到该位置。这完美解决了控制端和被控端分辨率不同的问题。
+
+4.  **停止推流 (`doDeleteStream`)**:
+    *   如果所有控制端都断开了连接，服务器会发来一个 `DELETESTREAM` 指令。
+    *   `doDeleteStream` 会调用 `stopStreamCb_` 回调函数，通知 `RtmpPushManager` 停止推流。
+
+---
+
+### 3. 阶段二：作为控制端 (Puller) 的流程
+
+1.  **主动请求拉流 (`obtainStream`)**:
+    *   在 `doJoin` 函数中，当客户端发现自己的类型是 `CONTROLLING` 时，它在进入 `IDLE` 状态后，会**立即调用 `obtainStream()`**。
+    *   `obtainStream()` 向服务器发送一个获取流的请求，并附上它想要连接的被控端的 `code_`。
+    *   发送请求后，状态立即从 `IDLE` 变为 `PULLER`（等待拉流）。
+
+2.  **接收流地址并开始播放 (`doPlayStream`)**:
+    *   服务器在协调被控端成功推流后，会将推流地址通过 `PLAYSTREAM` 指令发回给这个控制端。
+    *   `HandleMessage` 将指令分发给 `doPlayStream`。
+    *   `doPlayStream` 从消息中提取出 RTMP 流地址。
+    *   它调用 `startStreamCb_` **回调函数**，将流地址传递给 `AVDEMuxer` 和 `OpenGLRender` 等拉流和渲染模块，开始播放远程桌面。
+
+3.  **发送控制事件 (隐含流程)**:
+    *   这部分逻辑在 `SigConnection` 之外，通常在 UI 层（如 `OpenGLRender`）。
+    *   UI 窗口会捕获本地的鼠标键盘事件。
+    *   它会将这些事件封装成 `Mouse_Body`, `Key_Body` 等标准结构体。
+    *   然后调用 `SigConnection` 的 `Send()` 方法，将这些事件数据包发送给服务器，由服务器转发给被控端。
+
+---
+
+### 4. 核心机制总结
+
+*   **状态机**: `SigConnection` 内部通过 `State` 枚举（`NONE`, `IDLE`, `PULLER`, `PUSHER`）来管理自身在不同阶段的行为，确保在正确的状态下执行正确的操作。
+*   **消息驱动**: 整个流程由网络消息驱动。`HandleMessage` 像一个交通警察，根据不同的消息 `cmd`，将任务分发给不同的处理函数。
+*   **回调解耦**: 通过 `startStreamCb_` 和 `stopStreamCb_`，`SigConnection` 将网络信令逻辑与具体的媒体处理逻辑（推流、拉流）完全分离开。它只负责“发号施令”，而不关心具体怎么实现。
+*   **API模拟**: 在被控端，它通过调用 `SendInput` 和 `QCursor::setPos` 等系统级 API，将网络数据包“翻译”成了操作系统能够理解的真实用户输入，从而实现了远程控制。
+
+![alt text](image/image-17.png)
+
+## AVPlayer
+好的，我们来详细叙述 `AVPlayer` 的完整工作流程。`AVPlayer` 是整个远程控制客户端（拉流端）的**总指挥官**，它巧妙地将**信令通信、音视频处理、多线程播放、界面渲染**和**用户输入转发**这五大核心功能整合在了一起。
+
+整个流程可以分为以下几个关键阶段：
+
+---
+
+### 1. 阶段一：初始化与连接
+
+这是 `AVPlayer` 启动后的第一步，目标是与信令服务器建立联系。
+
+1.  **构造与初始化 (`AVPlayer::AVPlayer`, `AVPlayer::Init`)**:
+    *   当 `AVPlayer` 窗口被创建时，它的构造函数会立即调用 `Init()` 方法。
+    *   `Init()` 负责准备好所有必要的“工具”：
+        *   创建 `AVContext`：这是一个数据中心，包含了音视频解码器和用于线程间通信的队列。
+        *   创建 `AVDEMuxer`：这是解封装器，后续将负责从网络流中拉取数据并分离出音视频。
+        *   初始化 `AudioRender`：准备好本地的音频播放设备。
+        *   连接信号槽：`connect(this, &AVPlayer::sig_repaint, ...)`，这是实现线程安全渲染的关键。它将子线程的重绘请求信号 `sig_repaint` 连接到主线程的 `Repaint` 槽函数。
+
+2.  **发起连接 (`AVPlayer::Connect`)**:
+    *   用户在界面上输入连接码后，UI会调用 `Connect(ip, port, code)`。
+    *   `Connect` 方法创建一个 `SigConnection` 对象 (`sig_conn_`)，这是与信令服务器沟通的唯一通道。
+    *   **注册回调**：它将自己的两个成员函数 `HandleStartStream` 和 `HandleStopStream` 作为回调函数注册到 `sig_conn_` 中。这是一种解耦设计，`sig_conn_` 只管收发消息，具体业务由 `AVPlayer` 的回调来处理。
+    *   `sig_conn_` 最终向服务器发起连接并发送包含连接码的 `JOIN` 请求。
+
+---
+
+### 2. 阶段二：启动流处理
+
+当服务器确认连接并协调好被控端后，真正的音视频处理流程开始。
+
+1.  **接收开流指令 (`AVPlayer::HandleStartStream`)**:
+    *   信令服务器向 `sig_conn_` 发送一条 `PLAYSTREAM` 指令，其中包含了被控端生成的 RTMP 推流地址。
+    *   `sig_conn_` 收到指令后，自动调用之前注册的 `HandleStartStream` 回调函数，并将流地址传递进来。
+
+2.  **启动解封装与解码**:
+    *   `HandleStartStream` 立即命令 `avDEMuxer_` 打开 (`Open`) 这个流地址。
+    *   `avDEMuxer_` 内部会启动一个线程，开始从 RTMP 服务器拉取数据，将其解封装成压缩的视频包（H.264）和音频包（AAC），然后分别放入 `AVContext` 的解码前队列中。
+    *   `AVContext` 内部的解码器会从队列中取出数据包进行解码，再将解码后的原始数据（YUV 视频帧和 PCM 音频帧）放入解码后队列。
+
+3.  **启动播放线程**:
+    *   在 `HandleStartStream` 中，`AVPlayer` 创建并启动两个独立的播放线程：
+        *   `videoThread_`：负责运行 `videoPlay()` 方法。
+        *   `audioThread_`：负责运行 `audioPlay()` 方法。
+
+---
+
+### 3. 阶段三：音视频并发播放
+
+两个播放线程各司其职，并行工作。
+
+1.  **视频播放 (`AVPlayer::videoPlay`)**:
+    *   `videoThread_` 在一个循环中不断地从 `AVContext` 的**视频解码后队列**中尝试取出 YUV 视频帧。
+    *   取出帧后，它**并不直接渲染**（因为这会违反UI操作只能在主线程的原则），而是通过 `emit sig_repaint(frame)` 发出一个信号。
+    *   这个信号被 Qt 的事件系统捕获，并安全地调度到**主UI线程**去执行 `OpenGLRender::Repaint` 槽函数，最终利用 GPU 将画面渲染到屏幕上。
+
+2.  **音频播放 (`AVPlayer::audioPlay`)**:
+    *   `audioThread_` 在循环中从 `AVContext` 的**音频解码后队列**中取出 PCM 音频帧。
+    *   它直接调用 `AudioRender::Write()` 方法，将原始音频数据写入底层的音频设备缓冲区进行播放。音频 API 通常是线程安全的，所以可以直接在子线程调用。
+
+---
+
+### 4. 阶段四：远程控制事件转发
+
+在播放音视频的同时，`AVPlayer` 也在监听用户的操作。
+
+1.  **事件捕获**:
+    *   `AVPlayer` 重写了 Qt 的一系列事件处理函数，如 `mouseMoveEvent`, `keyPressEvent`, `wheelEvent` 等。
+    *   当用户的鼠标在 `AVPlayer` 窗口上移动、点击或滚动，或者按下键盘时，对应的事件处理函数就会被触发。
+
+2.  **数据打包与发送**:
+    *   在这些事件函数内部，程序会从事件对象中提取关键信息（如坐标、按键码、滚轮方向）。
+    *   然后调用 `sig_conn_` 的相应方法（如 `SendMoustMoveEvent`），将这些信息打包成预定义的网络格式。
+    *   `sig_conn_` 将数据包通过 TCP 连接发送给信令服务器，服务器再将其转发给被控端，被控端收到后模拟出相应的操作。
+
+---
+
+### 5. 阶段五：关闭与资源回收
+
+当用户关闭窗口或连接断开时，必须优雅地释放所有资源。
+
+1.  **触发关闭 (`AVPlayer::Close`)**:
+    *   `Close()` 方法被调用（可以由析构函数或 `HandleStopStream` 回调触发）。
+    *   它首先将 `stop_` 标志位置为 `true`，这是一个信号，通知 `audioPlay` 和 `videoPlay` 线程的循环应该退出了。
+    *   **等待线程结束**: 调用 `audioThread_->join()` 和 `videoThread_->join()`，确保两个子线程完全执行完毕后才继续，防止资源竞争和程序崩溃。
+    *   **释放资源**: 依次停止音频设备、断开网络连接、删除 `AVContext`、重置 `AVDEMuxer` 等，确保没有内存或句柄泄漏。
+
+通过这一整套设计，`AVPlayer` 实现了一个健壮、高效、解耦良好的远程桌面客户端。
